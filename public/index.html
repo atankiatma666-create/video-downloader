@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Grab — paste a link, get the video</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,600;12..96,800&display=swap" rel="stylesheet" />
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: { sans: ['"Bricolage Grotesque"', "system-ui", "sans-serif"] },
+          colors: {
+            steel: "#E6EDF5",   // page
+            ink: "#13233F",     // text, frame
+            slate: "#5D6F88",   // secondary text
+            signal: "#FFD23F",  // the one bold thing: the download action
+            alert: "#C2362B",   // errors
+          },
+        },
+      },
+    };
+  </script>
+  <style>
+    @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+    .reveal { animation: reveal .35s ease-out both; }
+    @keyframes reveal { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+  </style>
+</head>
+<body class="min-h-screen bg-steel font-sans text-ink antialiased">
+  <main class="mx-auto flex max-w-3xl flex-col px-5 pb-16 pt-14 sm:pt-24">
+
+    <header class="mb-10">
+      <h1 class="text-5xl font-extrabold leading-[0.95] tracking-tight sm:text-7xl">
+        Paste a link.<br />Keep the video.
+      </h1>
+      <p class="mt-5 max-w-lg text-lg text-slate">
+        Works with YouTube, Instagram, X/Twitter, TikTok, Vimeo and hundreds of other sites.
+        Only download videos you have the right to save.
+      </p>
+    </header>
+
+    <!-- Input bar -->
+    <form id="lookup" class="flex flex-col gap-3 sm:flex-row" novalidate>
+      <label for="url" class="sr-only">Video link</label>
+      <input
+        id="url" type="url" inputmode="url" autocomplete="off" required
+        placeholder="https://www.youtube.com/watch?v=…"
+        class="min-w-0 flex-1 rounded-xl border-2 border-ink bg-white px-4 py-4 text-lg placeholder:text-slate/60
+               focus:outline-none focus-visible:ring-4 focus-visible:ring-signal"
+      />
+      <button
+        id="lookupBtn" type="submit"
+        class="rounded-xl border-2 border-ink bg-ink px-6 py-4 text-lg font-semibold text-white
+               hover:bg-ink/90 focus:outline-none focus-visible:ring-4 focus-visible:ring-signal disabled:opacity-60"
+      >Find video</button>
+    </form>
+
+    <p id="error" role="alert" class="mt-4 hidden rounded-lg bg-alert/10 px-4 py-3 text-alert"></p>
+
+    <div id="loading" class="mt-8 hidden items-center gap-3 text-slate" aria-live="polite">
+      <svg class="h-5 w-5 animate-spin" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3" opacity=".25" />
+        <path d="M22 12a10 10 0 0 0-10-10" stroke="currentColor" stroke-width="3" stroke-linecap="round" />
+      </svg>
+      Reading the video's details…
+    </div>
+
+    <!-- Result -->
+    <section id="result" class="mt-10 hidden" aria-live="polite">
+      <div class="grid gap-6 sm:grid-cols-[minmax(0,240px)_1fr]">
+        <div class="relative overflow-hidden rounded-xl border-2 border-ink bg-ink/5">
+          <img id="thumb" alt="" class="aspect-video w-full object-cover" />
+          <span id="duration" class="absolute bottom-2 right-2 hidden rounded bg-ink px-2 py-0.5 text-sm font-semibold text-white"></span>
+        </div>
+        <div class="min-w-0">
+          <h2 id="title" class="text-2xl font-semibold leading-snug"></h2>
+          <p id="meta" class="mt-1 text-slate"></p>
+        </div>
+      </div>
+
+      <fieldset class="mt-8">
+        <legend class="mb-3 text-lg font-semibold">Choose a quality</legend>
+        <div id="formats" class="grid grid-cols-2 gap-2 sm:grid-cols-3"></div>
+      </fieldset>
+
+      <a
+        id="downloadBtn" href="#"
+        class="mt-8 flex w-full items-center justify-center gap-3 rounded-xl border-2 border-ink bg-signal px-6 py-5
+               text-xl font-extrabold shadow-[4px_4px_0_0_#13233F] transition-transform
+               hover:-translate-y-0.5 active:translate-y-0.5 active:shadow-[2px_2px_0_0_#13233F]
+               focus:outline-none focus-visible:ring-4 focus-visible:ring-ink/40"
+      >
+        <svg class="h-6 w-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true">
+          <path d="M12 3v12m0 0-5-5m5 5 5-5M4 20h16" stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
+        <span id="downloadLabel">Download</span>
+      </a>
+      <p id="mergeNote" class="mt-3 hidden text-sm text-slate">
+        This quality is stored as separate video and audio, so the server joins them first. Larger files take a moment to start.
+      </p>
+    </section>
+  </main>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    let current = null; // { url, info, selected }
+
+    const fmtBytes = (b) => {
+      if (!b) return "";
+      const u = ["B", "KB", "MB", "GB"]; let i = 0;
+      while (b >= 1024 && i < u.length - 1) { b /= 1024; i++; }
+      return `${b.toFixed(i > 1 ? 1 : 0)} ${u[i]}`;
+    };
+    const fmtTime = (s) => {
+      if (!s) return "";
+      s = Math.round(s);
+      const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = String(s % 60).padStart(2, "0");
+      return h ? `${h}:${String(m).padStart(2, "0")}:${sec}` : `${m}:${sec}`;
+    };
+
+    function showError(msg) {
+      $("error").textContent = msg;
+      $("error").classList.remove("hidden");
+    }
+
+    function setLoading(on) {
+      $("loading").classList.toggle("hidden", !on);
+      $("loading").classList.toggle("flex", on);
+      $("lookupBtn").disabled = on;
+      $("lookupBtn").textContent = on ? "Finding…" : "Find video";
+    }
+
+    function selectFormat(f) {
+      current.selected = f;
+      document.querySelectorAll("[data-fid]").forEach((el) => {
+        const on = el.dataset.fid === f.format_id;
+        el.setAttribute("aria-checked", on);
+        el.className = baseChip + (on ? " bg-ink text-white" : " bg-white hover:bg-ink/5");
+      });
+      const qs = new URLSearchParams({ url: current.url, format_id: f.format_id, title: current.info.title || "" });
+      $("downloadBtn").href = `/api/download?${qs}`;
+      $("downloadLabel").textContent = `Download ${f.type === "audio" ? "audio" : f.label} (${f.ext})`;
+      $("mergeNote").classList.toggle("hidden", !f.needs_merge);
+    }
+
+    const baseChip =
+      "flex flex-col items-start rounded-lg border-2 border-ink px-4 py-3 text-left focus:outline-none focus-visible:ring-4 focus-visible:ring-signal";
+
+    function render(info) {
+      $("thumb").src = info.thumbnail || "";
+      $("title").textContent = info.title || "Untitled video";
+      $("meta").textContent = [info.uploader, info.platform].filter(Boolean).join(", ");
+      const d = fmtTime(info.duration);
+      $("duration").textContent = d;
+      $("duration").classList.toggle("hidden", !d);
+
+      const box = $("formats");
+      box.innerHTML = "";
+      box.setAttribute("role", "radiogroup");
+
+      if (!info.formats.length) {
+        box.innerHTML = '<p class="col-span-full text-slate">No downloadable formats were found for this link.</p>';
+        $("downloadBtn").classList.add("hidden");
+      } else {
+        $("downloadBtn").classList.remove("hidden");
+        info.formats.forEach((f) => {
+          const btn = document.createElement("button");
+          btn.type = "button";
+          btn.dataset.fid = f.format_id;
+          btn.setAttribute("role", "radio");
+          btn.innerHTML = `<span class="text-lg font-semibold"></span><span class="text-sm opacity-75"></span>`;
+          btn.children[0].textContent = f.label;
+          btn.children[1].textContent = [f.ext.toUpperCase(), fmtBytes(f.filesize)].filter(Boolean).join("  ");
+          btn.onclick = () => selectFormat(f);
+          box.appendChild(btn);
+        });
+        selectFormat(info.formats[0]);
+      }
+
+      $("result").classList.remove("hidden");
+      $("result").classList.add("reveal");
+    }
+
+    $("lookup").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const url = $("url").value.trim();
+      $("error").classList.add("hidden");
+      $("result").classList.add("hidden");
+      $("result").classList.remove("reveal");
+
+      if (!/^https?:\/\//i.test(url)) return showError("Enter a full link starting with http:// or https://");
+
+      setLoading(true);
+      try {
+        const res = await fetch("/api/info", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || "Couldn't read that link. Check it opens in your browser and try again.");
+        current = { url, info: data, selected: null };
+        render(data);
+      } catch (err) {
+        showError(err.message);
+      } finally {
+        setLoading(false);
+      }
+    });
+  </script>
+</body>
+</html>
+
